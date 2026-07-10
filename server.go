@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -29,6 +30,34 @@ func initDB() {
 	)`)
 }
 
+func loadKeysFromTxt() {
+	data, err := ioutil.ReadFile("keys.txt")
+	if err != nil {
+		log.Println("No keys.txt found yet - create one in the repo")
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		expiry := strings.TrimSpace(parts[1])
+
+		db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status) VALUES (?, ?, 'AVAILABLE')", 
+			key, expiry)
+	}
+	log.Println("✅ Keys loaded from keys.txt")
+}
+
 func validateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
@@ -47,7 +76,8 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var expiry, status, storedHWID string
-	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).Scan(&expiry, &status, &storedHWID)
+	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).
+		Scan(&expiry, &status, &storedHWID)
 
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid or unregistered key"})
@@ -55,17 +85,16 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status == "REVOKED" {
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key has been revoked"})
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key revoked"})
 		return
 	}
 
-	// HWID Check
+	// HWID binding logic
 	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
-	// Bind if not bound
 	if storedHWID == "" || storedHWID == "UNBOUND" {
 		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
 	}
@@ -93,10 +122,10 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	initDB()
-	defer db.Close()
+	loadKeysFromTxt()   // ← Loads keys.txt on startup
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ Server Running")
+	fmt.Println("✅ Server Running with keys.txt support")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
