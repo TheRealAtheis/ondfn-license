@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: ondfn-license
+    env: go
+    buildCommand: go build -o app server.go
+    startCommand: ./app
+    autoDeploy: true
