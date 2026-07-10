@@ -1,0 +1,10 @@
+modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb2 h1:0w4w2tZqC5x5j3b0vX1/0f5s9yZ8aK7XhV0rT7J4yQ=
+modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb2/go.mod h1:0w4w2tZqC5x5j3b0vX1/0f5s9yZ8aK7XhV0rT7J4yQ=
+modernc.org/libc v1.55.3 h1:5Imc5R0fWlj3Z1j5mxlw8F8rQ1O6xQ0Q1wV2ExKq7Y=
+modernc.org/libc v1.55.3/go.mod h1:Go5qF0b5U0M0p5L7Uw0v5Hz6c4x2X7v7f8w9+7e+1M=
+modernc.org/mathutil v1.6.0 h1:fRe9+AmYlaej+64Oj8Xg0Y4YJ2I2zx4i+Xc8Q0M5wE=
+modernc.org/mathutil v1.6.0/go.mod h1:4p5n1j1Xjb9g6S+6H1Q7g0jY7n9/8P9J9sQfX6qW2I=
+modernc.org/memory v1.8.0 h1:2L0ae0y2j3l7I+J2v2yn5vR3v7vF3U9f5x0k6Yr6vQ=
+modernc.org/memory v1.8.0/go.mod h1:2L0ae0y2j3l7I+J2v2yn5vR3v7vF3U9f5x0k6Yr6vQ=
+modernc.org/sqlite v1.34.1 h1:u3Yi6M0N8t9yKRDwhXcyp1eJ0wT9F2t3Q7s5VowFds=
+modernc.org/sqlite v1.34.1/go.mod h1:pXV2x4ofE5P4zh0b9W4n8TrQ+7H8M2i1eyO4x2z7fQ=
