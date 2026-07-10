@@ -46,11 +46,11 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var expiry, status, hwid string
-	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).Scan(&expiry, &status, &hwid)
+	var expiry, status, storedHWID string
+	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).Scan(&expiry, &status, &storedHWID)
 
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid or expired key"})
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid or unregistered key"})
 		return
 	}
 
@@ -59,21 +59,22 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HWID binding
-	if hwid != "" && hwid != req.HWID && hwid != "UNBOUND" {
+	// HWID Check
+	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
-	if hwid == "" || hwid == "UNBOUND" {
+	// Bind if not bound
+	if storedHWID == "" || storedHWID == "UNBOUND" {
 		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
 	}
 
 	// Expiry check
 	expired := false
-	if !strings.Contains(strings.ToUpper(expiry), "LIFETIME") && !strings.Contains(expiry, "DAYS") {
+	if !strings.Contains(strings.ToUpper(expiry), "LIFETIME") {
 		expDate, _ := time.Parse("20060102", expiry)
-		if time.Now().UTC().After(expDate) {
+		if !expDate.IsZero() && time.Now().UTC().After(expDate) {
 			expired = true
 		}
 	}
@@ -96,6 +97,6 @@ func main() {
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ License Server Running on :8080")
+	fmt.Println("✅ Server Running")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
