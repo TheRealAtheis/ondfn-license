@@ -20,9 +20,11 @@ func initDB() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	db.Exec(`CREATE TABLE IF NOT EXISTS licenses (
 		key TEXT PRIMARY KEY,
 		expiry TEXT,
+		status TEXT DEFAULT "AVAILABLE",
 		hwid TEXT DEFAULT ""
 	)`)
 }
@@ -44,28 +46,32 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var expiry, hwid string
-	err := db.QueryRow("SELECT expiry, hwid FROM licenses WHERE key = ?", req.Key).Scan(&expiry, &hwid)
+	var expiry, status, hwid string
+	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).Scan(&expiry, &status, &hwid)
 
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid or expired key"})
 		return
 	}
 
-	// HWID check
+	if status == "REVOKED" {
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key has been revoked"})
+		return
+	}
+
+	// HWID binding
 	if hwid != "" && hwid != req.HWID && hwid != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
-	// Bind HWID
 	if hwid == "" || hwid == "UNBOUND" {
-		db.Exec("UPDATE licenses SET hwid = ? WHERE key = ?", req.HWID, req.Key)
+		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
 	}
 
 	// Expiry check
 	expired := false
-	if !strings.Contains(strings.ToUpper(expiry), "LIFETIME") {
+	if !strings.Contains(strings.ToUpper(expiry), "LIFETIME") && !strings.Contains(expiry, "DAYS") {
 		expDate, _ := time.Parse("20060102", expiry)
 		if time.Now().UTC().After(expDate) {
 			expired = true
