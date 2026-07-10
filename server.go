@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -31,9 +31,9 @@ func initDB() {
 }
 
 func loadKeysFromTxt() {
-	data, err := ioutil.ReadFile("keys.txt")
+	data, err := os.ReadFile("keys.txt")
 	if err != nil {
-		log.Println("❌ keys.txt not found!")
+		log.Println("❌ keys.txt not found! Create one in the repo.")
 		return
 	}
 
@@ -59,7 +59,7 @@ func loadKeysFromTxt() {
 			count++
 		}
 	}
-	log.Printf("✅ Loaded %d keys from keys.txt", count)
+	log.Printf("✅ Successfully loaded %d keys from keys.txt", count)
 }
 
 func validateHandler(w http.ResponseWriter, r *http.Request) {
@@ -93,13 +93,12 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HWID Check
+	// HWID binding
 	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
-	// Auto bind
 	if storedHWID == "" || storedHWID == "UNBOUND" {
 		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
 	}
@@ -131,6 +130,6 @@ func main() {
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ Server Running with keys.txt")
+	fmt.Println("✅ Server Running with keys.txt support")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
