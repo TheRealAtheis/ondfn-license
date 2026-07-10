@@ -33,12 +33,11 @@ func initDB() {
 func loadKeysFromTxt() {
 	data, err := os.ReadFile("keys.txt")
 	if err != nil {
-		log.Println("❌ keys.txt not found! Create one in the repo.")
+		log.Println("❌ keys.txt not found!")
 		return
 	}
 
 	lines := strings.Split(string(data), "\n")
-	count := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -53,13 +52,35 @@ func loadKeysFromTxt() {
 		key := strings.TrimSpace(parts[0])
 		expiry := strings.TrimSpace(parts[1])
 
-		_, err := db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status) VALUES (?, ?, 'AVAILABLE')", 
-			key, expiry)
-		if err == nil {
-			count++
+		db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status) VALUES (?, ?, 'AVAILABLE')", key, expiry)
+	}
+	log.Println("✅ Keys loaded from keys.txt")
+}
+
+func updateKeysTxt(key, expiry, status, hwid string) {
+	data, err := os.ReadFile("keys.txt")
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	newLines := []string{}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+"|") {
+			newLine := key + "|" + expiry + "|" + status
+			if hwid != "" {
+				newLine += "|" + hwid
+			}
+			newLines = append(newLines, newLine)
+		} else {
+			newLines = append(newLines, line)
 		}
 	}
-	log.Printf("✅ Successfully loaded %d keys from keys.txt", count)
+
+	os.WriteFile("keys.txt", []byte(strings.Join(newLines, "\n")), 0644)
+	log.Println("✅ Updated keys.txt for key:", key)
 }
 
 func validateHandler(w http.ResponseWriter, r *http.Request) {
@@ -93,14 +114,17 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HWID binding
+	// HWID Check
 	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
+	// Auto-activate & bind
+	newStatus := "ACTIVE"
 	if storedHWID == "" || storedHWID == "UNBOUND" {
-		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
+		db.Exec("UPDATE licenses SET hwid = ?, status = ? WHERE key = ?", req.HWID, newStatus, req.Key)
+		updateKeysTxt(req.Key, expiry, newStatus, req.HWID)  // ← Updates keys.txt
 	}
 
 	// Expiry check
@@ -130,6 +154,6 @@ func main() {
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ Server Running with keys.txt support")
+	fmt.Println("✅ Server Running - keys.txt auto update enabled")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
