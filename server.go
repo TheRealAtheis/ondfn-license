@@ -33,11 +33,12 @@ func initDB() {
 func loadKeysFromTxt() {
 	data, err := ioutil.ReadFile("keys.txt")
 	if err != nil {
-		log.Println("No keys.txt found yet - create one in the repo")
+		log.Println("❌ keys.txt not found!")
 		return
 	}
 
 	lines := strings.Split(string(data), "\n")
+	count := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -52,10 +53,13 @@ func loadKeysFromTxt() {
 		key := strings.TrimSpace(parts[0])
 		expiry := strings.TrimSpace(parts[1])
 
-		db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status) VALUES (?, ?, 'AVAILABLE')", 
+		_, err := db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status) VALUES (?, ?, 'AVAILABLE')", 
 			key, expiry)
+		if err == nil {
+			count++
+		}
 	}
-	log.Println("✅ Keys loaded from keys.txt")
+	log.Printf("✅ Loaded %d keys from keys.txt", count)
 }
 
 func validateHandler(w http.ResponseWriter, r *http.Request) {
@@ -89,12 +93,13 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HWID binding logic
+	// HWID Check
 	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
 
+	// Auto bind
 	if storedHWID == "" || storedHWID == "UNBOUND" {
 		db.Exec("UPDATE licenses SET hwid = ?, status = 'ACTIVE' WHERE key = ?", req.HWID, req.Key)
 	}
@@ -122,10 +127,10 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	initDB()
-	loadKeysFromTxt()   // ← Loads keys.txt on startup
+	loadKeysFromTxt()
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ Server Running with keys.txt support")
+	fmt.Println("✅ Server Running with keys.txt")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
