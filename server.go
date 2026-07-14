@@ -69,7 +69,10 @@ func updateKeysTxt(key, expiry, status, hwid string) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, key+"|") {
-			newLine := key + "|" + expiry + "|" + status
+			newLine := key + "|" + expiry
+			if status != "" {
+				newLine += "|" + status
+			}
 			if hwid != "" {
 				newLine += "|" + hwid
 			}
@@ -124,7 +127,7 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 	newStatus := "ACTIVE"
 	if storedHWID == "" || storedHWID == "UNBOUND" {
 		db.Exec("UPDATE licenses SET hwid = ?, status = ? WHERE key = ?", req.HWID, newStatus, req.Key)
-		updateKeysTxt(req.Key, expiry, newStatus, req.HWID)  // ← Updates keys.txt
+		updateKeysTxt(req.Key, expiry, newStatus, req.HWID)
 	}
 
 	// Expiry check
@@ -142,8 +145,8 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"valid":  true,
-		"expiry": expiry,
+		"valid":   true,
+		"expiry":  expiry,
 		"message": "Success",
 	})
 }
