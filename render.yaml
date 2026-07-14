@@ -5,3 +5,6 @@ services:
     buildCommand: go build -o app server.go
     startCommand: ./app
     autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8080"
