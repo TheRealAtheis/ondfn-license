@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +17,20 @@ import (
 )
 
 var db *sql.DB
+var ServerSecret string
+
+// ==================== CONFIG ====================
+func init() {
+	ServerSecret = os.Getenv("SERVER_SECRET")
+	if ServerSecret == "" {
+		log.Fatal("❌ SERVER_SECRET environment variable is not set!")
+	}
+	if len(ServerSecret) < 32 {
+		log.Fatal("❌ SERVER_SECRET is too short! Use at least 32-64 random characters.")
+	}
+}
+
+// ===============================================
 
 func initDB() {
 	var err error
@@ -86,6 +103,14 @@ func updateKeysTxt(key, expiry, status, hwid string) {
 	log.Println("✅ Updated keys.txt for key:", key)
 }
 
+// signResponse creates HMAC signature
+func signResponse(data map[string]any) string {
+	jsonBytes, _ := json.Marshal(data)
+	mac := hmac.New(sha256.New, []byte(ServerSecret))
+	mac.Write(jsonBytes)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func validateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
@@ -96,10 +121,9 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		Key  string `json:"key"`
 		HWID string `json:"hwid"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
 
-	if req.Key == "" {
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid key"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid request"})
 		return
 	}
 
@@ -144,11 +168,17 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"valid":   true,
-		"expiry":  expiry,
-		"message": "Success",
-	})
+	// === Build signed response ===
+	response := map[string]any{
+		"valid":     true,
+		"expiry":    expiry,
+		"message":   "Success",
+		"timestamp": time.Now().Unix(),
+	}
+
+	response["signature"] = signResponse(response)
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func main() {
@@ -157,6 +187,6 @@ func main() {
 
 	http.HandleFunc("/validate", validateHandler)
 
-	fmt.Println("✅ Server Running - keys.txt auto update enabled")
+	fmt.Println("✅ Server Running - Secure License System Active")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
