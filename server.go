@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -36,12 +37,21 @@ func initDB() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	db.Exec(`CREATE TABLE IF NOT EXISTS licenses (
 		key TEXT PRIMARY KEY,
 		expiry TEXT,
 		status TEXT DEFAULT 'AVAILABLE',
-		hwid TEXT DEFAULT ''
+		hwid TEXT DEFAULT '',
+		desktop_name TEXT DEFAULT '',
+		ip TEXT DEFAULT '',
+		activated_at TEXT DEFAULT ''
 	)`)
+
+	// Migrate old tables
+	db.Exec(`ALTER TABLE licenses ADD COLUMN desktop_name TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE licenses ADD COLUMN ip TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE licenses ADD COLUMN activated_at TEXT DEFAULT ''`)
 }
 
 func loadKeysFromTxt() {
@@ -70,7 +80,7 @@ func loadKeysFromTxt() {
 		if len(parts) >= 4 {
 			hwid = strings.TrimSpace(parts[3])
 		}
-		db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status, hwid) VALUES (?, ?, ?, ?)",
+		db.Exec(`INSERT OR IGNORE INTO licenses (key, expiry, status, hwid) VALUES (?, ?, ?, ?)`,
 			key, expiry, status, hwid)
 	}
 	log.Println("✅ Keys loaded from keys.txt")
@@ -148,11 +158,9 @@ func generateKey() string {
 }
 
 func checkAdmin(r *http.Request) bool {
-	auth := r.Header.Get("Authorization")
-	return auth == "Bearer "+ServerSecret
+	return r.Header.Get("Authorization") == "Bearer "+ServerSecret
 }
 
-// CORS helper – returns true if the request was an OPTIONS preflight (already handled)
 func enableCORS(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -164,7 +172,23 @@ func enableCORS(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// ---------- existing validate ----------
+func getClientIP(r *http.Request) string {
+	// Cloudflare / Render / proxies
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// ---------- VALIDATE ----------
 func validateHandler(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(w, r) {
 		return
@@ -173,34 +197,58 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
+
 	var req struct {
-		Key  string `json:"key"`
-		HWID string `json:"hwid"`
+		Key         string `json:"key"`
+		HWID        string `json:"hwid"`
+		DesktopName string `json:"desktop_name"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid request"})
 		return
 	}
-	var expiry, status, storedHWID string
-	err := db.QueryRow("SELECT expiry, status, hwid FROM licenses WHERE key = ?", req.Key).
-		Scan(&expiry, &status, &storedHWID)
+
+	var expiry, status, storedHWID, desktopName, ip, activatedAt string
+	err := db.QueryRow(`SELECT expiry, status, hwid, desktop_name, ip, activated_at 
+		FROM licenses WHERE key = ?`, req.Key).
+		Scan(&expiry, &status, &storedHWID, &desktopName, &ip, &activatedAt)
+
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Invalid or unregistered key"})
 		return
 	}
+
 	if status == "REVOKED" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key revoked"})
 		return
 	}
+
+	// HWID lock
 	if storedHWID != "" && storedHWID != req.HWID && storedHWID != "UNBOUND" {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "Key already bound to another PC"})
 		return
 	}
-	newStatus := "ACTIVE"
+
+	// First-time activation → store everything
 	if storedHWID == "" || storedHWID == "UNBOUND" {
-		db.Exec("UPDATE licenses SET hwid = ?, status = ? WHERE key = ?", req.HWID, newStatus, req.Key)
-		updateKeysTxt(req.Key, expiry, newStatus, req.HWID)
+		clientIP := getClientIP(r)
+		now := time.Now().UTC().Format("2006-01-02 15:04:05")
+
+		desktop := req.DesktopName
+		if desktop == "" {
+			desktop = req.HWID // fallback
+		}
+
+		db.Exec(`UPDATE licenses SET 
+			hwid = ?, desktop_name = ?, ip = ?, activated_at = ?, status = 'ACTIVE'
+			WHERE key = ?`,
+			req.HWID, desktop, clientIP, now, req.Key)
+
+		updateKeysTxt(req.Key, expiry, "ACTIVE", req.HWID)
 	}
+
+	// Expiry check
 	expired := false
 	if !strings.Contains(strings.ToUpper(expiry), "LIFETIME") {
 		expDate, _ := time.Parse("20060102", expiry)
@@ -212,8 +260,12 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"valid": false, "message": "License expired"})
 		return
 	}
+
 	response := map[string]any{
-		"valid": true, "expiry": expiry, "message": "Success", "timestamp": time.Now().Unix(),
+		"valid":     true,
+		"expiry":    expiry,
+		"message":   "Success",
+		"timestamp": time.Now().Unix(),
 	}
 	response["signature"] = signResponse(response)
 	json.NewEncoder(w).Encode(response)
@@ -228,7 +280,9 @@ func adminList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
-	rows, err := db.Query("SELECT key, expiry, status, hwid FROM licenses ORDER BY key")
+
+	rows, err := db.Query(`SELECT key, expiry, status, hwid, desktop_name, ip, activated_at 
+		FROM licenses ORDER BY key`)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -236,18 +290,24 @@ func adminList(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type L struct {
-		Key       string `json:"key"`
-		Expiry    string `json:"expiry"`
-		Status    string `json:"status"`
-		HWID      string `json:"hwid"`
-		DaysLeft  any    `json:"days_left"`
-		IsExpired bool   `json:"is_expired"`
+		Key         string `json:"key"`
+		Expiry      string `json:"expiry"`
+		Status      string `json:"status"`
+		HWID        string `json:"hwid"`
+		DesktopName string `json:"desktop_name"`
+		IP          string `json:"ip"`
+		ActivatedAt string `json:"activated_at"`
+		DaysLeft    any    `json:"days_left"`
+		IsExpired   bool   `json:"is_expired"`
 	}
+
 	var list []L
 	now := time.Now().UTC()
+
 	for rows.Next() {
 		var l L
-		rows.Scan(&l.Key, &l.Expiry, &l.Status, &l.HWID)
+		rows.Scan(&l.Key, &l.Expiry, &l.Status, &l.HWID, &l.DesktopName, &l.IP, &l.ActivatedAt)
+
 		if strings.Contains(strings.ToUpper(l.Expiry), "LIFETIME") {
 			l.DaysLeft = "Lifetime"
 		} else {
@@ -262,6 +322,7 @@ func adminList(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, l)
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(list)
 }
@@ -278,20 +339,26 @@ func adminCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
+
 	var req struct {
 		Key    string `json:"key"`
-		Expiry string `json:"expiry"` // LIFETIME or YYYYMMDD
+		Expiry string `json:"expiry"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
+
 	if req.Key == "" {
 		req.Key = generateKey()
 	}
 	if req.Expiry == "" {
 		req.Expiry = "LIFETIME"
 	}
-	db.Exec("INSERT OR REPLACE INTO licenses (key, expiry, status, hwid) VALUES (?, ?, 'AVAILABLE', '')",
-		req.Key, req.Expiry)
+
+	db.Exec(`INSERT OR REPLACE INTO licenses 
+		(key, expiry, status, hwid, desktop_name, ip, activated_at) 
+		VALUES (?, ?, 'AVAILABLE', '', '', '', '')`, req.Key, req.Expiry)
+
 	updateKeysTxt(req.Key, req.Expiry, "AVAILABLE", "")
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"success": true, "key": req.Key, "expiry": req.Expiry})
 }
@@ -308,12 +375,14 @@ func adminDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
+
 	var req struct{ Key string `json:"key"` }
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Key == "" {
 		http.Error(w, "missing key", 400)
 		return
 	}
+
 	db.Exec("DELETE FROM licenses WHERE key = ?", req.Key)
 	removeKeyFromTxt(req.Key)
 	json.NewEncoder(w).Encode(map[string]any{"success": true})
@@ -331,15 +400,21 @@ func adminUnbind(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
+
 	var req struct{ Key string `json:"key"` }
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Key == "" {
 		http.Error(w, "missing key", 400)
 		return
 	}
+
 	var expiry string
 	db.QueryRow("SELECT expiry FROM licenses WHERE key = ?", req.Key).Scan(&expiry)
-	db.Exec("UPDATE licenses SET hwid = '', status = 'AVAILABLE' WHERE key = ?", req.Key)
+
+	db.Exec(`UPDATE licenses SET 
+		hwid = '', desktop_name = '', ip = '', activated_at = '', status = 'AVAILABLE' 
+		WHERE key = ?`, req.Key)
+
 	updateKeysTxt(req.Key, expiry, "AVAILABLE", "")
 	json.NewEncoder(w).Encode(map[string]any{"success": true})
 }
