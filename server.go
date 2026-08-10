@@ -21,6 +21,8 @@ import (
 var db *sql.DB
 var ServerSecret string
 
+var DiscordWebhook string
+
 func init() {
 	ServerSecret = os.Getenv("SERVER_SECRET")
 	if ServerSecret == "" {
@@ -29,6 +31,9 @@ func init() {
 	if len(ServerSecret) < 32 {
 		log.Fatal("❌ SERVER_SECRET is too short! Use at least 32-64 random characters.")
 	}
+
+	// Discord webhook (optional)
+	DiscordWebhook = os.Getenv("DISCORD_WEBHOOK")
 }
 
 func initDB() {
@@ -246,6 +251,22 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 			req.HWID, desktop, clientIP, now, req.Key)
 
 		updateKeysTxt(req.Key, expiry, "ACTIVE", req.HWID)
+
+		// Discord notification
+		msg := fmt.Sprintf(
+			"# 🔗 Key Bounded:\n"+
+				"🖥️ **--** HWID: *%s*\n"+
+				"🌐 **--** IP Address: *%s*\n"+
+				"🏷️ **--** Desktop Name: *%s*\n"+
+				"🕰️ **--** Activated: *%s*\n"+
+				"🔑 **--** Key: **%s**",
+			req.HWID,
+			clientIP,
+			desktop,
+			now,
+			req.Key,
+		)
+		go sendDiscordWebhook(msg)
 	}
 
 	// Expiry check
@@ -359,6 +380,15 @@ func adminCreate(w http.ResponseWriter, r *http.Request) {
 
 	updateKeysTxt(req.Key, req.Expiry, "AVAILABLE", "")
 
+	msg := fmt.Sprintf(
+		"# 🔐 New Key Generated:\n"+
+			"⛔ **--** Date Expiry: %s\n"+
+			"🔑 **--** Key: **%s**",
+		formatExpiryNice(req.Expiry),
+		req.Key,
+	)
+	go sendDiscordWebhook(msg)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"success": true, "key": req.Key, "expiry": req.Expiry})
 }
@@ -417,6 +447,69 @@ func adminUnbind(w http.ResponseWriter, r *http.Request) {
 
 	updateKeysTxt(req.Key, expiry, "AVAILABLE", "")
 	json.NewEncoder(w).Encode(map[string]any{"success": true})
+}
+
+func sendDiscordWebhook(content string) {
+	if DiscordWebhook == "" {
+		return
+	}
+
+	payload := map[string]string{
+		"content": content,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", DiscordWebhook, strings.NewReader(string(body)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Println("Discord webhook error:", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+func formatExpiryNice(expiry string) string {
+	if strings.Contains(strings.ToUpper(expiry), "LIFETIME") {
+		return "**LIFETIME**"
+	}
+
+	// expected format: 20261031 or 10312026 (your keys use both styles)
+	var t time.Time
+	var err error
+
+	if len(expiry) == 8 {
+		// try YYYYMMDD first
+		t, err = time.Parse("20060102", expiry)
+		if err != nil {
+			// try MMDDYYYY
+			t, err = time.Parse("01022006", expiry)
+		}
+	}
+
+	if err != nil || t.IsZero() {
+		return "**" + expiry + "**"
+	}
+
+	// Example: 10 / 31 / 2026 *(October 31st, 2026)*
+	day := t.Day()
+	suffix := "th"
+	if day%10 == 1 && day != 11 {
+		suffix = "st"
+	} else if day%10 == 2 && day != 12 {
+		suffix = "nd"
+	} else if day%10 == 3 && day != 13 {
+		suffix = "rd"
+	}
+
+	return fmt.Sprintf("**%02d / %02d / %d** *(%s %d%s, %d)*",
+		int(t.Month()), day, t.Year(),
+		t.Month().String(), day, suffix, t.Year())
 }
 
 func main() {
