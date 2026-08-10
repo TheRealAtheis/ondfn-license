@@ -152,8 +152,23 @@ func checkAdmin(r *http.Request) bool {
 	return auth == "Bearer "+ServerSecret
 }
 
+// CORS helper – returns true if the request was an OPTIONS preflight (already handled)
+func enableCORS(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return true
+	}
+	return false
+}
+
 // ---------- existing validate ----------
 func validateHandler(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
 		return
@@ -206,6 +221,9 @@ func validateHandler(w http.ResponseWriter, r *http.Request) {
 
 // ---------- ADMIN API ----------
 func adminList(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
 	if !checkAdmin(r) {
 		http.Error(w, "Unauthorized", 401)
 		return
@@ -249,6 +267,9 @@ func adminList(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminCreate(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
 	if !checkAdmin(r) {
 		http.Error(w, "Unauthorized", 401)
 		return
@@ -276,6 +297,9 @@ func adminCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminDelete(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
 	if !checkAdmin(r) {
 		http.Error(w, "Unauthorized", 401)
 		return
@@ -296,6 +320,9 @@ func adminDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminUnbind(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
 	if !checkAdmin(r) {
 		http.Error(w, "Unauthorized", 401)
 		return
