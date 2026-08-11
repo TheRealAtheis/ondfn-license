@@ -580,9 +580,6 @@ func main() {
 	http.HandleFunc("/admin/delete", adminDelete)
 	http.HandleFunc("/admin/unbind", adminUnbind)
 
-	fmt.Println("✅ Server Running - Secure License System Active")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if enableCORS(w, r) {
 			return
@@ -590,4 +587,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	fmt.Println("✅ Server Running - Secure License System Active")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
