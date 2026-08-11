@@ -23,6 +23,63 @@ var ServerSecret string
 
 var DiscordWebhook string
 
+var LatestSoftwareVersion = os.Getenv("SOFTWARE_VERSION")
+
+func verifyHandler(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
+
+	// Accept both GET and POST
+	var clientVersion string
+
+	if r.Method == "GET" {
+		clientVersion = r.URL.Query().Get("version")
+	} else if r.Method == "POST" {
+		var req struct {
+			Version string `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			clientVersion = req.Version
+		}
+	} else {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	clientVersion = strings.TrimSpace(clientVersion)
+	if clientVersion == "" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"valid":   false,
+			"message": "version is required",
+			"latest":  LatestSoftwareVersion,
+		})
+		return
+	}
+
+	// Simple comparison (you can make it smarter later)
+	isUpToDate := clientVersion == LatestSoftwareVersion
+
+	// Optional: allow slightly older versions if you want
+	// isUpToDate := compareVersions(clientVersion, LatestSoftwareVersion) >= 0
+
+	response := map[string]any{
+		"valid":   isUpToDate,
+		"latest":  LatestSoftwareVersion,
+		"current": clientVersion,
+		"message": "",
+	}
+
+	if isUpToDate {
+		response["message"] = "Up to date"
+	} else {
+		response["message"] = "Outdated version. Please update."
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func init() {
 	ServerSecret = os.Getenv("SERVER_SECRET")
 	if ServerSecret == "" {
@@ -517,6 +574,7 @@ func main() {
 	loadKeysFromTxt()
 
 	http.HandleFunc("/validate", validateHandler)
+	http.HandleFunc("/verify", verifyHandler)
 	http.HandleFunc("/admin/list", adminList)
 	http.HandleFunc("/admin/create", adminCreate)
 	http.HandleFunc("/admin/delete", adminDelete)
