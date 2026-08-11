@@ -512,6 +512,14 @@ func formatExpiryNice(expiry string) string {
 		t.Month().String(), day, suffix, t.Year())
 }
 
+http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+})
+
 func main() {
 	initDB()
 	loadKeysFromTxt()
